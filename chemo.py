@@ -2,8 +2,10 @@ import time
 import socket
 import json
 import praw
-import urllib2
+import os
 import random
+import pickle
+import sys
 
 from threading import Thread
 
@@ -13,27 +15,61 @@ irc_settings = {
   'server':   'irc.amazdong.com',
   'port':     6667,
   'channels': ['#interns', '#chemo']
+#  'server':   'irc.tddirc.net',
+#  'port':     6667,
+#  'channels': ['#thunked', '#chemo']
 }
 
-# Worker bees
-workers = [
-  {'name': 'aniravigali', 'password': 'e269201c4f025659de7072f73fb4c433'},
-  {'name': 'oprahversiontwo', 'password': 'a1cb02bf6d240de3338e72b5f0d3f268'},
-  {'name': 'japlandian', 'password': '6f2f01539468a88f60877828b0312b04'}
-]
+#irc_settings = {
+#  'nick': 'chemo',
+#  'server': 'irc.tddirc.net',
+#  'port': 6667,
+#  'channels': ['#thunked']
+#}
+
+def save(filename, object):
+  with open(filename, 'w') as serializer:
+    pickle.dump(object, serializer)
+
+# Load worker bees from file
+if os.path.exists('workers'):
+  with open('workers') as deserializer:
+    workers = pickle.load(deserializer)
+else:
+  # Provide some starter workers
+  workers = [
+    {'name': 'aniravigali', 'password': 'e269201c4f025659de7072f73fb4c433'},
+    {'name': 'oprahversiontwo', 'password': 'a1cb02bf6d240de3338e72b5f0d3f268'},
+    {'name': 'japlandian', 'password': '6f2f01539468a88f60877828b0312b04'}
+  ]
+
+  # And start the file for next time
+  save('workers', workers)
 
 # Status
 queued_jobs = []
 jobs_completed = True
+
+# Stats
+if os.path.exists('stats'):
+  with open('stats') as deserializer:
+    stats = pickle.load(deserializer)
+else:
+  stats = {
+    'upvotes':   0,
+    'downvotes': 0,
+    'jobs':      0
+  }
+  save('stats', stats)
 
 def handle_queue():
   global queued_jobs # lol
   recent_success = False
   while True:
     if recent_success:
-      time.sleep(random.randint(5, 60))
+      time.sleep(random.randint(40, 250))
 
-    if len(queued_jobs) > 0:
+    if queued_jobs and len(queued_jobs) > 0:
       # Take the FIRST-QUEUED job (at the start, because we append for new jobs)
       job = queued_jobs.pop(0)
       if 'worker' in job.keys() and 'action' in job.keys() and 'url' in job.keys():
@@ -56,24 +92,43 @@ def send_irc_message(irc, channel, message):
 
 # Logic for doing tasks
 def do_task(worker, action, url):
+  global stats
   try:
     r = praw.Reddit(user_agent=worker['name'])
     r.login(worker['name'], worker['password'])
-    s = r.get_submission(url=url)
-    c = s.comments[0]
+
+    # Kill trailing slashes
+    if url[-1] == '/':
+      url = url[:-1]
+
+    c = r.get_submission(url=url)
+
+    # If this is a comment job, grab the first comment
+    if url.count('/') > 7:
+      c = c.comments[0]
+
     if action == 'upvote':
       c.upvote()
+      stats['upvotes'] = stats['upvotes'] + 1
     elif action == 'downvote':
       c.downvote()
-    return True
+      stats['downvotes'] = stats['downvotes'] + 1
+    result = True
   except:
-    return False
+    print('failed voting!')
+    print(sys.exc_info()[0])
+    result = False
+
+  save('stats', stats)
+  return result
 
 def queue_jobs_for(workers, action, url):
   global queued_jobs
   global jobs_completed
+  global stats
   for worker in workers:
     job = {'worker': worker, 'action': action, 'url': url}
+    stats['jobs'] = stats['jobs'] + 1
     print('Queuing job: ' + str(job))
     queued_jobs.append(job)
   jobs_completed = False
@@ -110,7 +165,6 @@ for line in connection:
     params = message[message.find(' ') + 1:]
 
     print "<" + user + "> " + message
-    print command, params
 
     # Add new workers automatically
     if user == '^' and message[0:8] == '{"ok":1,':
@@ -118,6 +172,7 @@ for line in connection:
         user_hash = json.loads(message)
         if 'name' in user_hash.keys() and 'password' in user_hash.keys():
           workers.append(user_hash)
+          save('workers', workers)
       except:
         print("Couldn't parse worker details from ^: " + message)
 
@@ -127,6 +182,8 @@ for line in connection:
         user_hash = json.loads(params)
         if 'name' in user_hash.keys() and 'password' in user_hash.keys():
           workers.append(user_hash)
+
+        save('workers', workers)
       except:
         send_irc_message(irc, channel, "Couldn't parse worker details.")
 
@@ -143,3 +200,10 @@ for line in connection:
     elif command == '!upvote':
       queue_jobs_for(workers, 'upvote', params)
       send_irc_message(irc, channel, 'Queueing ' + str(len(workers)) + ' upvotes for ' + params)
+
+    elif command == '!stats' or command == '!status':
+      send_irc_message(irc, channel, ''.join([str(len(queued_jobs)) + ' jobs queued right now across ',
+        str(len(workers)) + ' workers, ',
+        str(stats['jobs'] - len(queued_jobs)) + ' jobs completed, ',
+        str(stats['upvotes']) + ' upvotes given, ',
+        str(stats['downvotes']) + ' downvotes given']))
