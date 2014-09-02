@@ -194,12 +194,14 @@ for line in connection:
       send_irc_message(irc, channel, str(len(queued_jobs)) + ' jobs in queue')
 
     elif command == '!downvote':
-      queue_jobs_for(workers, 'downvote', params)
-      send_irc_message(irc, channel, 'Queueing ' + str(len(workers)) + ' downvotes for ' + params)
+      sample_size = min(20, len(workers))
+      queue_jobs_for(random.sample(workers, sample_size), 'downvote', params)
+      send_irc_message(irc, channel, 'Queueing ' + str(sample_size) + ' downvotes for ' + params)
 
     elif command == '!upvote':
-      queue_jobs_for(workers, 'upvote', params)
-      send_irc_message(irc, channel, 'Queueing ' + str(len(workers)) + ' upvotes for ' + params)
+      sample_size = min(20, len(workers))
+      queue_jobs_for(random.sample(workers, sample_size), 'upvote', params)
+      send_irc_message(irc, channel, 'Queueing ' + str(sample_size) + ' upvotes for ' + params)
 
     elif command == '!stats' or command == '!status':
       send_irc_message(irc, channel, ''.join([str(len(queued_jobs)) + ' jobs queued right now across ',
